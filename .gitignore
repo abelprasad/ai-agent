@@ -20,3 +20,6 @@ __pycache__/
 
 # Database files
 *.db
+
+# Claude files
+claude.md

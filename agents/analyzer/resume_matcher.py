@@ -124,45 +124,32 @@ class ResumeMatcher(BaseTool):
 
     def _calculate_score(self, internship):
         """Calculate relevance score for an internship (0-100)"""
-        score = 0
         max_score = 100
 
         # Combine title, company, location, description for matching
         text = f"{internship.title} {internship.company} {internship.description or ''}".lower()
 
-        # Skill matching (60% of score)
+        # Skill matching (70% of score)
         skill_matches = 0
         for skill in self.skills:
             if skill.lower() in text:
                 skill_matches += 1
 
         if self.skills:
-            skill_score = min(60, (skill_matches / len(self.skills)) * 100)
+            skill_score = min(70, (skill_matches / len(self.skills)) * 100)
         else:
-            skill_score = 30  # Default if no skills
+            skill_score = 35  # Default if no skills
 
-        # Keyword matching (25% of score)
+        # Keyword matching (30% of score)
         keyword_matches = 0
         for keyword in self.keywords:
             if keyword.lower() in text:
                 keyword_matches += 1
 
-        keyword_score = min(25, (keyword_matches / len(self.keywords)) * 50)
-
-        # Company bonus (15% of score) - FAANG and top companies
-        top_companies = [
-            "google", "meta", "amazon", "apple", "microsoft", "netflix", "nvidia",
-            "openai", "anthropic", "stripe", "airbnb", "uber", "lyft", "doordash",
-            "coinbase", "robinhood", "palantir", "databricks", "snowflake", "figma",
-            "notion", "discord", "twitch", "spotify", "linkedin", "salesforce",
-            "adobe", "oracle", "ibm", "intel", "amd", "qualcomm", "tesla", "spacex"
-        ]
-
-        company_lower = internship.company.lower() if internship.company else ""
-        company_score = 15 if any(tc in company_lower for tc in top_companies) else 5
+        keyword_score = min(30, (keyword_matches / len(self.keywords)) * 60)
 
         # Calculate final score
-        score = skill_score + keyword_score + company_score
+        score = skill_score + keyword_score
 
         return min(max_score, round(score, 1))
 
