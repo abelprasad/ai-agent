@@ -6,18 +6,59 @@ from shared.tools.base import BaseTool
 from shared.database.database import get_db_session, InternshipListing
 import re
 import json
+import logging
+
+logger = logging.getLogger(__name__)
+
+# Singleton cache for resume data
+_resume_cache = {
+    'skills': None,
+    'keywords': None,
+    'loaded': False,
+    'path': None
+}
+
+
+def get_cached_resume_data(resume_path):
+    """Get cached resume data or load if not cached."""
+    global _resume_cache
+
+    if _resume_cache['loaded'] and _resume_cache['path'] == resume_path:
+        return _resume_cache['skills'], _resume_cache['keywords']
+
+    return None, None
+
+
+def set_cached_resume_data(resume_path, skills, keywords):
+    """Cache resume data."""
+    global _resume_cache
+    _resume_cache['skills'] = skills
+    _resume_cache['keywords'] = keywords
+    _resume_cache['loaded'] = True
+    _resume_cache['path'] = resume_path
+
 
 class ResumeMatcher(BaseTool):
     name = "match_resume"
     description = "Score internships based on resume/skills match"
 
     def __init__(self, resume_path=None):
-        self.skills = []
-        self.keywords = []
         # Use project directory for resume path
         project_dir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
         self.resume_path = resume_path or os.path.join(project_dir, "resume.txt")
-        self._load_resume()
+
+        # Try to use cached data first
+        cached_skills, cached_keywords = get_cached_resume_data(self.resume_path)
+        if cached_skills is not None:
+            self.skills = cached_skills
+            self.keywords = cached_keywords
+            logger.debug("Using cached resume data")
+        else:
+            self.skills = []
+            self.keywords = []
+            self._load_resume()
+            # Cache the loaded data
+            set_cached_resume_data(self.resume_path, self.skills, self.keywords)
 
     def _load_resume(self):
         """Load and parse resume to extract skills"""

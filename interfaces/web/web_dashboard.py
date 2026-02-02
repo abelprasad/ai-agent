@@ -878,6 +878,85 @@ def get_internships(search: Optional[str] = None, status: Optional[str] = None, 
     session.close()
     return result
 
+@app.get("/api/export/csv")
+def export_csv(status: Optional[str] = None):
+    """Export internships as CSV"""
+    from fastapi.responses import Response
+    import csv
+    import io
+
+    session = get_db_session()
+    query = session.query(InternshipListing)
+
+    if status:
+        query = query.filter(InternshipListing.application_status == status)
+
+    internships = query.order_by(InternshipListing.relevance_score.desc()).all()
+
+    # Create CSV in memory
+    output = io.StringIO()
+    writer = csv.writer(output)
+
+    # Header
+    writer.writerow([
+        'ID', 'Title', 'Company', 'Location', 'URL',
+        'Status', 'Score', 'Posted (days ago)', 'Discovered', 'Notes'
+    ])
+
+    # Data rows
+    for i in internships:
+        writer.writerow([
+            i.id,
+            i.title,
+            i.company,
+            i.location or '',
+            i.url or '',
+            i.application_status or 'not_applied',
+            i.relevance_score or 0,
+            i.age_days or '',
+            i.discovered_at.strftime('%Y-%m-%d') if i.discovered_at else '',
+            (i.notes or '').replace('\n', ' ')[:100]
+        ])
+
+    session.close()
+
+    # Return CSV response
+    csv_content = output.getvalue()
+    return Response(
+        content=csv_content,
+        media_type="text/csv",
+        headers={"Content-Disposition": "attachment; filename=internships.csv"}
+    )
+
+@app.get("/api/export/json")
+def export_json(status: Optional[str] = None):
+    """Export internships as JSON"""
+    session = get_db_session()
+    query = session.query(InternshipListing)
+
+    if status:
+        query = query.filter(InternshipListing.application_status == status)
+
+    internships = query.order_by(InternshipListing.relevance_score.desc()).all()
+
+    result = []
+    for i in internships:
+        result.append({
+            "id": i.id,
+            "title": i.title,
+            "company": i.company,
+            "location": i.location,
+            "url": i.url,
+            "status": i.application_status,
+            "score": i.relevance_score,
+            "age_days": i.age_days,
+            "discovered_at": i.discovered_at.isoformat() if i.discovered_at else None,
+            "notes": i.notes
+        })
+
+    session.close()
+    return {"count": len(result), "internships": result}
+
 @app.post("/api/internships")
 def create_internship(data: dict):
     """Create new internship"""

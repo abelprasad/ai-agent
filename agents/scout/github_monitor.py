@@ -9,6 +9,42 @@ import json
 from datetime import datetime
 import hashlib
 import re
+import time
+import logging
+
+logger = logging.getLogger(__name__)
+
+
+def retry_request(url, max_retries=3, backoff=2, timeout=20):
+    """Make HTTP request with exponential backoff retry."""
+    for attempt in range(max_retries):
+        try:
+            response = requests.get(url, timeout=timeout)
+            if response.status_code == 200:
+                return response
+            elif response.status_code == 403:
+                # Rate limited - wait longer
+                wait_time = backoff ** (attempt + 2)
+                logger.warning(f"Rate limited, waiting {wait_time}s...")
+                time.sleep(wait_time)
+            elif response.status_code >= 500:
+                # Server error - retry
+                wait_time = backoff ** attempt
+                logger.warning(f"Server error {response.status_code}, retrying in {wait_time}s...")
+                time.sleep(wait_time)
+            else:
+                return response  # 404, etc - don't retry
+        except requests.exceptions.Timeout:
+            wait_time = backoff ** attempt
+            logger.warning(f"Timeout on {url}, retrying in {wait_time}s...")
+            time.sleep(wait_time)
+        except requests.exceptions.RequestException as e:
+            wait_time = backoff ** attempt
+            logger.warning(f"Request error: {e}, retrying in {wait_time}s...")
+            time.sleep(wait_time)
+
+    # Final attempt
+    return requests.get(url, timeout=timeout)
 
 class GitHubInternshipMonitor(BaseTool):
     name = "monitor_github_internships"
@@ -95,7 +131,7 @@ class GitHubInternshipMonitor(BaseTool):
     def _check_commits(self, commits_url):
         """Check recent commits on the repo"""
         try:
-            response = requests.get(commits_url, timeout=15)
+            response = retry_request(commits_url, max_retries=3, timeout=15)
             if response.status_code == 200:
                 commits = response.json()
                 recent_commits = commits[:10]  # Last 10 commits
@@ -109,14 +145,14 @@ class GitHubInternshipMonitor(BaseTool):
                 return {'commit_count': 0, 'latest_time': None, 'latest_message': None}
 
         except Exception as e:
-            print(f"[GitHubMonitor] Error checking commits: {str(e)}")
+            logger.error(f"Error checking commits: {str(e)}")
             return {'commit_count': 0, 'latest_time': None, 'latest_message': None}
 
     def _extract_internships(self, raw_url, limit=500):
         """Extract internship listings from README"""
         try:
-            print(f"[GitHubMonitor] Fetching README content...")
-            response = requests.get(raw_url, timeout=20)
+            logger.info(f"Fetching README content...")
+            response = retry_request(raw_url, max_retries=3, timeout=20)
 
             if response.status_code != 200:
                 print(f"[GitHubMonitor] Failed to fetch README: {response.status_code}")
