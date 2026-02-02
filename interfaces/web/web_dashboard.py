@@ -7,10 +7,14 @@ import os
 sys.path.append(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 
 from shared.database.database import get_db_session, InternshipListing, AgentJob, mark_as_applied
+from agents.analyzer.resume_matcher import ResumeMatcher
 from sqlalchemy import func, or_
 import json
 from datetime import datetime
 from typing import Optional
+
+# Initialize resume matcher for ATS analysis
+resume_matcher = ResumeMatcher()
 
 app = FastAPI(title="Internship Database Dashboard")
 
@@ -151,12 +155,19 @@ def dashboard():
             .btn-danger:hover { 
                 background: #b91c1c; 
             }
-            .btn-success { 
-                background: #16a34a; 
-                color: #fafafa; 
+            .btn-success {
+                background: #16a34a;
+                color: #fafafa;
             }
-            .btn-success:hover { 
-                background: #15803d; 
+            .btn-success:hover {
+                background: #15803d;
+            }
+            .btn-info {
+                background: #0891b2;
+                color: #fafafa;
+            }
+            .btn-info:hover {
+                background: #0e7490;
             }
 
             .internships { 
@@ -490,6 +501,17 @@ def dashboard():
                 </form>
             </div>
         </div>
+
+        <!-- ATS Analysis Modal -->
+        <div id="analyze-modal" class="modal">
+            <div class="modal-content" style="max-width: 600px;">
+                <h3>ATS Resume Analysis</h3>
+                <div id="analyze-content">Loading...</div>
+                <div style="display: flex; gap: 10px; justify-content: end; margin-top: 20px;">
+                    <button type="button" class="btn btn-secondary" onclick="closeModal()">Close</button>
+                </div>
+            </div>
+        </div>
         
         <script>
             let currentInternships = [];
@@ -538,6 +560,7 @@ def dashboard():
                             ${internship.relevance_score > 0 ? `<span class="score-badge ${getScoreClass(internship.relevance_score)}">${internship.relevance_score}% Match</span>` : ''}
                             <span class="status ${internship.application_status || 'not-applied'}">${formatStatus(internship.application_status || 'not_applied')}</span>
                             <div class="action-btns">
+                                <button class="btn btn-sm btn-info" onclick="analyzeInternship(${internship.id})">Analyze</button>
                                 <button class="btn btn-sm" onclick="editInternship(${internship.id})">Edit</button>
                                 ${internship.application_status === 'not_applied' || !internship.application_status ?
                                     `<button class="btn btn-sm btn-success" onclick="markAsApplied(${internship.id})">Applied</button>` :
@@ -640,6 +663,76 @@ def dashboard():
             function closeModal() {
                 document.getElementById('edit-modal').style.display = 'none';
                 document.getElementById('add-modal').style.display = 'none';
+                document.getElementById('analyze-modal').style.display = 'none';
+            }
+
+            async function analyzeInternship(id) {
+                document.getElementById('analyze-content').innerHTML = '<div style="text-align: center; padding: 20px;">Analyzing...</div>';
+                document.getElementById('analyze-modal').style.display = 'block';
+
+                try {
+                    const response = await fetch(`/api/internships/${id}/analyze`);
+                    const result = await response.json();
+
+                    if (result.success) {
+                        const data = result.data;
+                        const scoreColor = data.ats_score >= 60 ? '#16a34a' : data.ats_score >= 40 ? '#ca8a04' : '#dc2626';
+
+                        let html = `
+                            <div style="margin-bottom: 20px;">
+                                <div style="font-size: 14px; color: #a1a1aa; margin-bottom: 4px;">${data.company}</div>
+                                <div style="font-size: 16px; font-weight: 600; color: #fafafa;">${data.title}</div>
+                            </div>
+
+                            <div style="background: #0a0a0a; border-radius: 8px; padding: 20px; margin-bottom: 20px; text-align: center;">
+                                <div style="font-size: 48px; font-weight: 700; color: ${scoreColor};">${data.ats_score}%</div>
+                                <div style="font-size: 12px; color: #71717a; text-transform: uppercase;">ATS Match Score</div>
+                                <div style="font-size: 13px; color: #a1a1aa; margin-top: 8px;">${data.match_count} of ${data.total_keywords} keywords matched</div>
+                            </div>
+                        `;
+
+                        if (data.matching_keywords.length > 0) {
+                            html += `
+                                <div style="margin-bottom: 16px;">
+                                    <div style="font-size: 12px; font-weight: 500; color: #16a34a; text-transform: uppercase; margin-bottom: 8px;">Matching Keywords</div>
+                                    <div style="display: flex; flex-wrap: wrap; gap: 6px;">
+                                        ${data.matching_keywords.map(kw => `<span style="background: #166534; color: #bbf7d0; padding: 4px 8px; border-radius: 4px; font-size: 12px;">${kw}</span>`).join('')}
+                                    </div>
+                                </div>
+                            `;
+                        }
+
+                        if (data.missing_keywords.length > 0) {
+                            html += `
+                                <div style="margin-bottom: 16px;">
+                                    <div style="font-size: 12px; font-weight: 500; color: #dc2626; text-transform: uppercase; margin-bottom: 8px;">Missing Keywords</div>
+                                    <div style="display: flex; flex-wrap: wrap; gap: 6px;">
+                                        ${data.missing_keywords.slice(0, 15).map(kw => `<span style="background: #7f1d1d; color: #fecaca; padding: 4px 8px; border-radius: 4px; font-size: 12px;">${kw}</span>`).join('')}
+                                    </div>
+                                </div>
+                            `;
+                        }
+
+                        if (data.recommendations.length > 0) {
+                            html += `
+                                <div>
+                                    <div style="font-size: 12px; font-weight: 500; color: #a1a1aa; text-transform: uppercase; margin-bottom: 8px;">Recommendations</div>
+                                    ${data.recommendations.map(rec => `
+                                        <div style="background: #0a0a0a; padding: 12px; border-radius: 6px; margin-bottom: 8px; border-left: 3px solid ${rec.priority === 'high' ? '#dc2626' : rec.priority === 'medium' ? '#ca8a04' : '#16a34a'};">
+                                            <div style="font-size: 13px; color: #e4e4e7;">${rec.message}</div>
+                                        </div>
+                                    `).join('')}
+                                </div>
+                            `;
+                        }
+
+                        document.getElementById('analyze-content').innerHTML = html;
+                    } else {
+                        document.getElementById('analyze-content').innerHTML = `<div style="color: #dc2626;">Error: ${result.error}</div>`;
+                    }
+                } catch (error) {
+                    document.getElementById('analyze-content').innerHTML = `<div style="color: #dc2626;">Error analyzing internship</div>`;
+                }
             }
             
             // Form submissions
@@ -853,17 +946,23 @@ def mark_internship_applied(internship_id: int):
 def delete_internship(internship_id: int):
     """Delete internship"""
     session = get_db_session()
-    
+
     internship = session.query(InternshipListing).get(internship_id)
     if not internship:
         session.close()
         raise HTTPException(status_code=404, detail="Internship not found")
-    
+
     session.delete(internship)
     session.commit()
     session.close()
-    
+
     return {"success": True}
+
+@app.get("/api/internships/{internship_id}/analyze")
+def analyze_internship(internship_id: int):
+    """Analyze job posting for ATS optimization"""
+    result = resume_matcher.analyze_job(internship_id)
+    return result
 
 if __name__ == "__main__":
     import uvicorn

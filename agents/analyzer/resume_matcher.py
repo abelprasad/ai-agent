@@ -14,7 +14,9 @@ class ResumeMatcher(BaseTool):
     def __init__(self, resume_path=None):
         self.skills = []
         self.keywords = []
-        self.resume_path = resume_path or os.path.expanduser("~/ai-agent/resume.txt")
+        # Use project directory for resume path
+        project_dir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+        self.resume_path = resume_path or os.path.join(project_dir, "resume.txt")
         self._load_resume()
 
     def _load_resume(self):
@@ -187,6 +189,153 @@ class ResumeMatcher(BaseTool):
 
         session.close()
         return results
+
+    def analyze_job(self, internship_id):
+        """
+        Analyze a job posting for ATS optimization.
+        Returns: job keywords, matching keywords, missing keywords, and recommendations.
+        """
+        try:
+            session = get_db_session()
+            internship = session.query(InternshipListing).get(internship_id)
+
+            if not internship:
+                session.close()
+                return {"success": False, "error": "Internship not found"}
+
+            # Combine all job text
+            job_text = f"{internship.title} {internship.description or ''} {internship.requirements or ''}".lower()
+
+            # Extract keywords from job posting
+            job_keywords = self._extract_skills(job_text) or []
+
+            # Also extract from title specifically (high priority keywords)
+            title_keywords = self._extract_skills(internship.title.lower()) or []
+
+            # Add common job requirement keywords
+            job_keywords = list(set(job_keywords + self._extract_requirement_keywords(job_text)))
+
+            # Get resume skills (already loaded in self.skills)
+            resume_skills = [s.lower() for s in self.skills]
+
+            # Find matches and gaps
+            matching = [kw for kw in job_keywords if kw.lower() in resume_skills]
+            missing = [kw for kw in job_keywords if kw.lower() not in resume_skills]
+
+            # Calculate ATS score
+            if job_keywords:
+                ats_score = round((len(matching) / len(job_keywords)) * 100, 1)
+            else:
+                ats_score = 50.0  # Default if no keywords found
+
+            # Generate recommendations
+            recommendations = self._generate_recommendations(missing, ats_score, internship)
+
+            session.close()
+
+            return {
+                "success": True,
+                "data": {
+                    "internship_id": internship_id,
+                    "title": internship.title,
+                    "company": internship.company,
+                    "ats_score": ats_score,
+                    "job_keywords": job_keywords,
+                    "matching_keywords": matching,
+                    "missing_keywords": missing,
+                    "match_count": len(matching),
+                    "total_keywords": len(job_keywords),
+                    "recommendations": recommendations
+                }
+            }
+
+        except Exception as e:
+            print(f"[ResumeMatcher] Error analyzing job: {e}")
+            return {"success": False, "error": str(e)}
+
+    def _extract_requirement_keywords(self, text):
+        """Extract additional requirement keywords beyond tech skills"""
+        requirement_patterns = [
+            # Experience levels
+            r'\b(entry.level|junior|senior|staff|intern|internship|co.op|new.grad)\b',
+            # Degree requirements
+            r'\b(bachelor|master|phd|bs|ms|computer.science|cs|engineering)\b',
+            # Soft skills
+            r'\b(communication|teamwork|leadership|problem.solving|analytical|detail.oriented)\b',
+            # Work style
+            r'\b(remote|hybrid|onsite|full.time|part.time)\b',
+            # Specific tech areas
+            r'\b(frontend|backend|fullstack|full.stack|devops|mlops|data.engineering)\b',
+            r'\b(distributed.systems|microservices|cloud.native|serverless)\b',
+            r'\b(testing|qa|automation|performance|security|scalability)\b',
+        ]
+
+        found = set()
+        for pattern in requirement_patterns:
+            matches = re.findall(pattern, text, re.IGNORECASE)
+            found.update([m.lower().replace('.', ' ') for m in matches])
+
+        return list(found)
+
+    def _generate_recommendations(self, missing, ats_score, internship):
+        """Generate actionable recommendations based on analysis"""
+        recommendations = []
+
+        # Score-based recommendations
+        if ats_score < 30:
+            recommendations.append({
+                "priority": "high",
+                "type": "low_match",
+                "message": "Low keyword match. This role may not align well with your current resume, or consider adding relevant skills."
+            })
+        elif ats_score < 50:
+            recommendations.append({
+                "priority": "medium",
+                "type": "moderate_match",
+                "message": "Moderate match. Adding a few key skills could significantly improve your chances."
+            })
+        elif ats_score >= 70:
+            recommendations.append({
+                "priority": "low",
+                "type": "strong_match",
+                "message": "Strong match! Your resume aligns well with this role."
+            })
+
+        # Missing keywords recommendations
+        if missing:
+            # Prioritize technical skills
+            tech_missing = [kw for kw in missing if kw in [
+                'python', 'java', 'javascript', 'typescript', 'react', 'node',
+                'aws', 'docker', 'kubernetes', 'sql', 'mongodb', 'git',
+                'tensorflow', 'pytorch', 'machine learning', 'deep learning'
+            ]]
+
+            if tech_missing:
+                recommendations.append({
+                    "priority": "high",
+                    "type": "missing_tech",
+                    "message": f"Add these technical skills to your resume: {', '.join(tech_missing[:5])}"
+                })
+
+            other_missing = [kw for kw in missing if kw not in tech_missing][:5]
+            if other_missing:
+                recommendations.append({
+                    "priority": "medium",
+                    "type": "missing_keywords",
+                    "message": f"Consider adding: {', '.join(other_missing)}"
+                })
+
+        # Company-specific tips
+        company_lower = internship.company.lower() if internship.company else ""
+        faang = ['google', 'meta', 'amazon', 'apple', 'microsoft', 'netflix']
+        if any(f in company_lower for f in faang):
+            recommendations.append({
+                "priority": "info",
+                "type": "faang_tip",
+                "message": "FAANG company - emphasize system design, algorithms, and scalability experience."
+            })
+
+        return recommendations
 
 
 # Standalone test
